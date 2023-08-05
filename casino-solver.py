@@ -9,8 +9,8 @@ import pyautogui
 from multiprocessing import Process, Queue
 import json
 import Xlib.threaded
-from pykeyboard import PyKeyboard
 import uinput
+import subprocess
 
 # kbd = PyKeyboard()
 
@@ -159,25 +159,14 @@ class FingerprintSolver:
         return True
 
     def __input_solution(self, solution):
-        cursor_x = 0
-        k = self.keyb
-        solved = 0
-        for y in range(len(solution)):
-            for x in range(len(solution[y])):
-                if solution[y][x] == 1:
-                    if cursor_x < x:
-                        k.send(k.D)
-                    elif cursor_x > x:
-                        k.send(k.A)
-                    cursor_x = x
-                    k.send(k.ENTER)
-                    solved += 1
-            if solved == 4:
-                break
-            if y < len(solution) - 1:
-                k.send(k.S)
+        # fire subprocess to input solution and wait for it to finish
+        # binary name solution_inputter
+        # args: solution
 
-        k.send(k.TAB)
+        solution_inputter_path = os.path.join(
+            os.path.dirname(__file__), 'solution_inputter')
+        subprocess.run([solution_inputter_path, str(solution)])
+
 
 # saygilar by sono
 
@@ -237,7 +226,7 @@ class Kb:
     def send(self, key):
         # self.keyb.tap_key(key)
         self.keyb.emit_click(key)
-        # time.sleep(0.05)
+        time.sleep(0.025)
 
 
 class HotkeyExecutor:
@@ -286,7 +275,7 @@ def main():
     CTRL_T = [CTRL, KeyCode.from_char('t')]
 
     fp_hotkey = HotKey(CTRL_E, fingerprint_solve_event)
-    exit_hotkey = HotKey(CTRL_Q, exit)
+    exit_hotkey = HotKey(CTRL_Q, bye)
 
     hotkeys = [fp_hotkey, exit_hotkey]
     hke = HotkeyExecutor(hotkeys)
