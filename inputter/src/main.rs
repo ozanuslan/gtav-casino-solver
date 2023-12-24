@@ -2,13 +2,9 @@ use enigo::{Enigo, Key, KeyboardControllable};
 use serde_json;
 use std::env;
 
-fn sleep(ms: u64) {
-    std::thread::sleep(std::time::Duration::from_millis(ms));
-}
-
 fn main() {
     let mut enigo = Enigo::new();
-    enigo.set_delay(100000);
+    enigo.set_delay(50000);
     let args: Vec<String> = env::args().collect();
     let arg_arr = &args[1];
     let array: Vec<Vec<i8>> = serde_json::from_str(arg_arr).unwrap();

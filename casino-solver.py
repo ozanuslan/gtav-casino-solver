@@ -1,19 +1,12 @@
 #!/bin/python3
 
-from pynput.keyboard import Key, Controller, Listener, HotKey, KeyCode
+from pynput.keyboard import Key, Listener, HotKey, KeyCode
 import os
-import sys
 import time
-import cv2
-import pyautogui
 from multiprocessing import Process, Queue
-import json
-import Xlib.threaded
+import pyscreeze
 import uinput
 import subprocess
-
-# kbd = PyKeyboard()
-
 
 def inclusive_range(start, end, step=1):
     return range(start, end + step, step)
@@ -30,6 +23,8 @@ def log(message, *args, **kwargs):
 
 
 class FingerprintSolver:
+
+    screenshot = None
 
     def __init__(self, fp_dir, keyboard_wrapper):
         self.fp_dir = fp_dir
@@ -66,9 +61,10 @@ class FingerprintSolver:
     def __get_matching_base_fp(self):
         q = Queue()
         processes = []
+        self.screenshot = pyscreeze.screenshot()
         for main_fp in self.main_fp_dict.values():
             p = Process(target=self.__get_matching_fp_helper,
-                        args=(main_fp, q, ))
+                        args=(main_fp, self.screenshot, q))
             p.start()
             processes.append(p)
 
@@ -85,9 +81,13 @@ class FingerprintSolver:
         else:
             return results[0]
 
-    def __get_matching_fp_helper(self, fp_path, q):
-        box = pyautogui.locateOnScreen(
-            fp_path, grayscale=True, confidence=0.8)
+    def __get_matching_fp_helper(self, fp_path, screenshot, q):
+        try:
+            box = pyscreeze.locate(fp_path, screenshot, grayscale=True, confidence=0.8)
+        except Exception as e:
+            log(e)
+            box = None
+
         if box is not None:
             q.put((self.__get_base_fp_name(fp_path), box))
         else:
@@ -98,7 +98,7 @@ class FingerprintSolver:
         processes = []
         for solution_fp in self.solution_fp_dict[base_fp_name]:
             p = Process(target=self.__get_matching_fp_helper,
-                        args=(solution_fp, q, ))
+                        args=(solution_fp, self.screenshot, q))
             p.start()
             processes.append(p)
 
@@ -159,14 +159,9 @@ class FingerprintSolver:
         return True
 
     def __input_solution(self, solution):
-        # fire subprocess to input solution and wait for it to finish
-        # binary name solution_inputter
-        # args: solution
-
         solution_inputter_path = os.path.join(
             os.path.dirname(__file__), 'solution_inputter')
         subprocess.run([solution_inputter_path, str(solution)])
-
 
 # saygilar by sono
 
@@ -204,12 +199,6 @@ def fingerprint_solve_event():
 
 
 class Kb:
-    # W = 'w'
-    # A = 'a'
-    # S = 's'
-    # D = 'd'
-    # TAB = kbd.tab_key
-    # ENTER = kbd.enter_key
     W = uinput.KEY_W
     A = uinput.KEY_A
     S = uinput.KEY_S
@@ -218,13 +207,12 @@ class Kb:
     ENTER = uinput.KEY_ENTER
 
     def __init__(self):
-        # self.keyb = kbd
         self.keyb = uinput.Device(
             [self.W, self.A, self.S, self.D, self.TAB, self.ENTER])
         super()
 
     def send(self, key):
-        # self.keyb.tap_key(key)
+        log('Sending {}'.format(key))
         self.keyb.emit_click(key)
         time.sleep(0.025)
 
@@ -268,11 +256,8 @@ def main():
     fingerprintsolver = FingerprintSolver(full_path, keyboard_wrapper)
 
     CTRL = Key.ctrl
-    ALT = Key.alt
-    SHIFT = Key.shift
     CTRL_E = [CTRL, KeyCode.from_char('e')]
     CTRL_Q = [CTRL, KeyCode.from_char('q')]
-    CTRL_T = [CTRL, KeyCode.from_char('t')]
 
     fp_hotkey = HotKey(CTRL_E, fingerprint_solve_event)
     exit_hotkey = HotKey(CTRL_Q, bye)
