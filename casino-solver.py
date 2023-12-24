@@ -5,7 +5,6 @@ import os
 import time
 from multiprocessing import Process, Queue
 import pyscreeze
-import uinput
 import subprocess
 
 def inclusive_range(start, end, step=1):
@@ -26,13 +25,12 @@ class FingerprintSolver:
 
     screenshot = None
 
-    def __init__(self, fp_dir, keyboard_wrapper):
+    def __init__(self, fp_dir):
         self.fp_dir = fp_dir
         self.file_extension = '.png'
         self.main_fp_suffix = '_main' + self.file_extension
         self.main_fp_dict = self.__get_main_fp_dict()
         self.solution_fp_dict = self.__get_solution_fp_dict()
-        self.keyb = keyboard_wrapper
 
     def __get_fingerprint_path(self, fp_name):
         return os.path.join(self.fp_dir, fp_name)
@@ -197,26 +195,6 @@ def fingerprint_solve_event():
     else:
         log('Failed to solve fingerprints')
 
-
-class Kb:
-    W = uinput.KEY_W
-    A = uinput.KEY_A
-    S = uinput.KEY_S
-    D = uinput.KEY_D
-    TAB = uinput.KEY_TAB
-    ENTER = uinput.KEY_ENTER
-
-    def __init__(self):
-        self.keyb = uinput.Device(
-            [self.W, self.A, self.S, self.D, self.TAB, self.ENTER])
-        super()
-
-    def send(self, key):
-        log('Sending {}'.format(key))
-        self.keyb.emit_click(key)
-        time.sleep(0.025)
-
-
 class HotkeyExecutor:
     def __init__(self, hotkeys):
         self.hotkeys = hotkeys
@@ -250,10 +228,8 @@ def main():
     base_path = os.path.dirname(os.path.realpath(__file__))
     full_path = os.path.join(base_path, fp_dir_name)
 
-    keyboard_wrapper = Kb()
-
     global fingerprintsolver
-    fingerprintsolver = FingerprintSolver(full_path, keyboard_wrapper)
+    fingerprintsolver = FingerprintSolver(full_path)
 
     CTRL = Key.ctrl
     CTRL_E = [CTRL, KeyCode.from_char('e')]
