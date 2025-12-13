@@ -38,3 +38,7 @@ Python port of Carrot’s AHK fingerprint solver with multi‑monitor support an
 
 ## Optional Linux helpers
 `setup.sh` installs extra tools (xdotool/uinput, builds `inputter/`) if you want lower-level input on Linux. The main solver works with just the Python deps above; you typically do not need this script on Windows.
+
+## Linux Support
+Brother, you gotta install `tk` on the system.
+*IMPORTANT:* Does not work on wayland! Only works on X11.
