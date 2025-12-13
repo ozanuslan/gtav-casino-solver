@@ -1,2 +1,4 @@
-pyscreeze
-uinput
+opencv-python-headless
+numpy
+keyboard
+mss
