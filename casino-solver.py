@@ -2,7 +2,8 @@
 Python port of Carrot's fingerprint solver (AHK v1.5), now cross-platform.
 
 Hotkeys (global):
-- Ctrl+E or Right Ctrl: run the solver once.
+- Ctrl+E: run the solver once.
+- Ctrl+R: reset cursor to grid top-left.
 - Right Shift (hold): show the scan area overlay.
 - Ctrl+T: exit.
 
@@ -13,6 +14,8 @@ CLI options:
 - --monitor N            Select which monitor to capture (mss index, default 1).
 - --resolution WxH       Override resolution for scan area + template scaling (e.g., 2560x1440).
 - --match-threshold F    Matching cutoff (default 0.58; higher = stricter).
+- --scan-box x1,y1,x2,y2 Manual scan area override (screen coords).
+- --reset-state          Force cursor to top-left before/after solving to avoid drift.
 
 Notes:
 - Runs best with the game in windowed borderless mode so screen captures work and key events land.
@@ -239,6 +242,7 @@ class FingerprintSolver:
         logical_resolution: Optional[Tuple[int, int]],
         match_threshold: float,
         scan_override: Optional[Tuple[int, int, int, int]],
+        reset_state: bool,
     ) -> None:
         self.template_root = template_root
         self.monitor = get_display_info(monitor_index)
@@ -253,6 +257,7 @@ class FingerprintSolver:
         self.templates_gray = [cv2.cvtColor(tpl, cv2.COLOR_BGR2GRAY) for tpl in self.templates]
 
         self.match_threshold = match_threshold
+        self.reset_state = reset_state
         self.keyboard = GenericKeyboard()
         self.current_pos = (1, 1)
         self._lock = threading.Lock()
@@ -291,6 +296,25 @@ class FingerprintSolver:
     def _tap(self, key: str, repeat: int, delay: float) -> None:
         self.keyboard.tap(key, repeat=repeat, delay=delay)
 
+    def _hard_reset_cursor(self) -> None:
+        """Force cursor to top-left of the 2x4 grid to avoid drift."""
+        # Two columns -> 2 moves left is enough; add one extra for safety.
+        self._tap("a", 3, 0.02)
+        # Four rows -> 4 moves up is enough; add one extra for safety.
+        self._tap("w", 5, 0.02)
+        self.current_pos = (1, 1)
+
+    def reset_cursor(self) -> None:
+        """Public reset trigger (hotkey)."""
+        if not self._lock.acquire(blocking=False):
+            print("Reset skipped; solver is running.")
+            return
+        try:
+            self._hard_reset_cursor()
+            print("Cursor reset to top-left.")
+        finally:
+            self._lock.release()
+
     def _move_cursor(self, target: Tuple[int, int], click: bool = True) -> None:
         dx = target[0] - self.current_pos[0]
         dy = target[1] - self.current_pos[1]
@@ -317,6 +341,9 @@ class FingerprintSolver:
 
         start = time.time()
         try:
+            if self.reset_state:
+                self._hard_reset_cursor()
+
             self.current_pos = (1, 1)
             frame = self._grab_area()
             frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -341,6 +368,8 @@ class FingerprintSolver:
             else:
                 time.sleep(0.01)
                 self.keyboard.tap("tab", repeat=1, delay=0.0)
+            if self.reset_state:
+                self._hard_reset_cursor()
         finally:
             self._lock.release()
 
@@ -355,6 +384,11 @@ def main() -> None:
         type=parse_scan_box,
         help="Override scan box as x1,y1,x2,y2 (screen coords). Skips auto area calculation.",
     )
+    parser.add_argument(
+        "--reset-state",
+        action="store_true",
+        help="Force cursor to the top-left of the grid before and after solving (helps if movement drifted).",
+    )
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parent
@@ -366,6 +400,7 @@ def main() -> None:
             logical_resolution=args.resolution,
             match_threshold=args.match_threshold,
             scan_override=args.scan_box,
+            reset_state=args.reset_state,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"Startup failed: {exc}")
@@ -374,8 +409,8 @@ def main() -> None:
     overlay = Overlay(solver.area)
     shutdown = threading.Event()
 
-    keyboard.add_hotkey("ctrl+e", solver.match_fingerprint)
-    keyboard.add_hotkey("right ctrl", solver.match_fingerprint)
+    keyboard.add_hotkey("ctrl+e", solver.match_fingerprint, trigger_on_release=False)
+    keyboard.add_hotkey("ctrl+r", solver.reset_cursor, trigger_on_release=False)
     keyboard.on_press_key("right shift", lambda _: overlay.show())
     keyboard.on_release_key("right shift", lambda _: overlay.hide())
     keyboard.add_hotkey("ctrl+t", shutdown.set)
@@ -387,7 +422,7 @@ def main() -> None:
     )
     print(f"Templates: {solver.template_dir.name} | Match threshold: {solver.match_threshold}")
     print(f"Scan area: {solver.area.left},{solver.area.top} -> {solver.area.right},{solver.area.bottom}")
-    print("Hotkeys: Ctrl+E or Right Ctrl to solve, Right Shift to preview area, Ctrl+T to exit.")
+    print("Hotkeys: Ctrl+E to solve, Ctrl+R to reset cursor, Right Shift to preview area, Ctrl+T to exit.")
 
     try:
         while not shutdown.is_set():
