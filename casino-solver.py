@@ -25,7 +25,9 @@ Notes:
 from __future__ import annotations
 
 import argparse
+import json
 import queue
+import subprocess
 import threading
 import time
 from dataclasses import dataclass
@@ -36,12 +38,19 @@ import cv2
 import mss
 import numpy as np
 from pynput import keyboard as pynput_keyboard
-
+from pynput.keyboard import Key
 
 BASE_RESOLUTION = (1920, 1080)
 TEMPLATE_COUNT = 16
 MATCH_THRESHOLD = 0.58  # Increase if you get false positives, decrease if matches are missed.
 
+# Game control keys
+KEY_MOVE_LEFT = 'a'
+KEY_MOVE_RIGHT = 'd'
+KEY_MOVE_UP = 'w'
+KEY_MOVE_DOWN = 's'
+KEY_CONFIRM = Key.enter
+KEY_SKIP = Key.tab
 
 def parse_resolution(value: str) -> Tuple[int, int]:
     parts = value.lower().split("x")
@@ -177,6 +186,163 @@ def load_templates(root: Path, screen_size: Tuple[int, int]) -> Tuple[List[np.nd
     return templates, scale, source_dir
 
 
+class RustInputter:
+    """Keyboard input using the Rust enigo-based binary (works with games like GTA V)."""
+
+    def __init__(self, binary_path: Path) -> None:
+        self.binary_path = binary_path
+        if not self.binary_path.exists():
+            raise FileNotFoundError(f"Rust inputter not found at {binary_path}")
+
+    def send_grid_solution(self, grid: List[List[int]]) -> None:
+        """Send a 2x4 grid solution to the Rust binary."""
+        json_data = json.dumps(grid)
+        print(f"[DEBUG] Calling Rust inputter with grid: {grid}")
+        
+        try:
+            result = subprocess.run(
+                [str(self.binary_path), json_data],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode != 0:
+                print(f"[WARNING] Rust inputter failed: {result.stderr}")
+        except subprocess.TimeoutExpired:
+            print("[WARNING] Rust inputter timed out")
+        except Exception as e:
+            print(f"[WARNING] Failed to call Rust inputter: {e}")
+
+
+class WindowsDirectInput:
+    """Direct keyboard input using Windows SendInput API (works with games like GTA V)."""
+
+    def __init__(self) -> None:
+        import ctypes
+        from ctypes import wintypes
+        
+        # Store ctypes module for later use
+        self.ctypes = ctypes
+        self.wintypes = wintypes
+        
+        self.SendInput = ctypes.windll.user32.SendInput
+        self.MapVirtualKeyW = ctypes.windll.user32.MapVirtualKeyW
+        self.PUL = ctypes.POINTER(ctypes.c_ulong)
+        
+        # Virtual key codes
+        self.VK_CODES = {
+            'a': 0x41, 'd': 0x44, 'w': 0x57, 's': 0x53,
+            'enter': 0x0D, 'tab': 0x09,
+            'shift': 0x10, 'ctrl': 0x11,
+        }
+        
+        # Scan codes for hardware-level input
+        self.SCAN_CODES = {
+            'a': 0x1E, 'd': 0x20, 'w': 0x11, 's': 0x1F,
+            'enter': 0x1C, 'tab': 0x0F,
+        }
+        
+        # Define structures for SendInput
+        class KeyBdInput(ctypes.Structure):
+            _fields_ = [
+                ("wVk", wintypes.WORD),
+                ("wScan", wintypes.WORD),
+                ("dwFlags", wintypes.DWORD),
+                ("time", wintypes.DWORD),
+                ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))
+            ]
+        
+        class HardwareInput(ctypes.Structure):
+            _fields_ = [
+                ("uMsg", wintypes.DWORD),
+                ("wParamL", wintypes.WORD),
+                ("wParamH", wintypes.WORD)
+            ]
+        
+        class MouseInput(ctypes.Structure):
+            _fields_ = [
+                ("dx", wintypes.LONG),
+                ("dy", wintypes.LONG),
+                ("mouseData", wintypes.DWORD),
+                ("dwFlags", wintypes.DWORD),
+                ("time", wintypes.DWORD),
+                ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))
+            ]
+        
+        class InputUnion(ctypes.Union):
+            _fields_ = [
+                ("mi", MouseInput),
+                ("ki", KeyBdInput),
+                ("hi", HardwareInput)
+            ]
+        
+        class Input(ctypes.Structure):
+            _fields_ = [
+                ("type", wintypes.DWORD),
+                ("union", InputUnion)
+            ]
+        
+        self.KeyBdInput = KeyBdInput
+        self.Input = Input
+        self.INPUT_KEYBOARD = 1
+        self.KEYEVENTF_KEYUP = 0x0002
+        self.KEYEVENTF_SCANCODE = 0x0008
+
+    def _get_vk_code(self, key: str|Key) -> int:
+        """Get virtual key code for a key."""
+        if isinstance(key, Key):
+            key_map = {
+                Key.enter: 'enter',
+                Key.tab: 'tab',
+                Key.shift: 'shift',
+                Key.ctrl: 'ctrl',
+            }
+            key = key_map.get(key, '')
+        
+        key_lower = key.lower() if isinstance(key, str) else ''
+        return self.VK_CODES.get(key_lower, 0)
+    
+    def _get_scan_code(self, key: str|Key) -> int:
+        """Get hardware scan code for a key."""
+        if isinstance(key, Key):
+            key_map = {
+                Key.enter: 'enter',
+                Key.tab: 'tab',
+            }
+            key = key_map.get(key, '')
+        
+        key_lower = key.lower() if isinstance(key, str) else ''
+        return self.SCAN_CODES.get(key_lower, 0)
+
+    def tap(self, key: str|Key, repeat: int = 1, delay: float = 0.02) -> None:
+        """Send a key press using Windows SendInput API with hardware scan codes."""
+        scan_code = self._get_scan_code(key)
+        
+        if scan_code == 0:
+            print(f"[WARNING] Unknown key: {key}")
+            return
+        
+        print(f"[DEBUG] Tapping key: {key} (SC:{scan_code:#04x}) x{repeat} times with {delay}s delay")
+        
+        for _ in range(repeat):
+            # Key down - using scan code for hardware-level input
+            ki_down = self.KeyBdInput(0, scan_code, self.KEYEVENTF_SCANCODE, 0, None)
+            input_down = self.Input(self.INPUT_KEYBOARD)
+            input_down.union.ki = ki_down
+            self.SendInput(1, self.ctypes.byref(input_down), self.ctypes.sizeof(input_down))
+            
+            time.sleep(0.015)  # 15ms delay between press and release
+            
+            # Key up - using scan code for hardware-level input
+            ki_up = self.KeyBdInput(0, scan_code, self.KEYEVENTF_SCANCODE | self.KEYEVENTF_KEYUP, 0, None)
+            input_up = self.Input(self.INPUT_KEYBOARD)
+            input_up.union.ki = ki_up
+            self.SendInput(1, self.ctypes.byref(input_up), self.ctypes.sizeof(input_up))
+            
+            if delay:
+                time.sleep(delay)
+
+
 class GenericKeyboard:
     """Cross-platform keyboard events via pynput."""
 
@@ -184,7 +350,9 @@ class GenericKeyboard:
         self.controller = pynput_keyboard.Controller()
 
     @staticmethod
-    def _normalize_key(key: str) -> Union[pynput_keyboard.Key, str]:
+    def _normalize_key(key: str|Key) -> Union[pynput_keyboard.Key, str]:
+        if isinstance(key, Key):
+            return key
         lookup = {
             "enter": pynput_keyboard.Key.enter,
             "tab": pynput_keyboard.Key.tab,
@@ -193,8 +361,9 @@ class GenericKeyboard:
         }
         return lookup.get(key.lower(), key)
 
-    def tap(self, key: str, repeat: int = 1, delay: float = 0.02) -> None:  # pragma: no cover - hardware dependent
+    def tap(self, key: str|Key, repeat: int = 1, delay: float = 0.02) -> None:  # pragma: no cover - hardware dependent
         key_obj = self._normalize_key(key)
+        print(f"[DEBUG] Tapping key: {key} ({key_obj}) x{repeat} times with {delay}s delay")
         for _ in range(repeat):
             self.controller.press(key_obj)
             self.controller.release(key_obj)
@@ -273,7 +442,13 @@ class FingerprintSolver:
 
         self.match_threshold = match_threshold
         self.reset_state = reset_state
-        self.keyboard = GenericKeyboard()
+        
+        # Use WindowsDirectInput - Rust binary has compatibility issues with old enigo version
+        print(f"[INFO] Using WindowsDirectInput for key sending")
+        self.use_rust = False
+        self.keyboard = WindowsDirectInput()
+        self.rust_inputter = None
+        
         self.current_pos = (1, 1)
         self._lock = threading.Lock()
 
@@ -308,15 +483,15 @@ class FingerprintSolver:
         gy = max(1, min(4, gy))
         return gx, gy
 
-    def _tap(self, key: str, repeat: int, delay: float) -> None:
+    def _tap(self, key: str|Key, repeat: int, delay: float) -> None:
         self.keyboard.tap(key, repeat=repeat, delay=delay)
 
     def _hard_reset_cursor(self) -> None:
         """Force cursor to top-left of the 2x4 grid to avoid drift."""
         # Two columns -> 2 moves left is enough; add one extra for safety.
-        self._tap("a", 3, 0.02)
+        self._tap(KEY_MOVE_LEFT, 3, 0.015)
         # Four rows -> 4 moves up is enough; add one extra for safety.
-        self._tap("w", 5, 0.02)
+        self._tap(KEY_MOVE_UP, 5, 0.015)
         self.current_pos = (1, 1)
 
     def reset_cursor(self) -> None:
@@ -335,19 +510,73 @@ class FingerprintSolver:
         dy = target[1] - self.current_pos[1]
 
         if dx > 0:
-            self._tap("d", dx, 0.025)
+            self._tap(KEY_MOVE_RIGHT, dx, 0.015)
         elif dx < 0:
-            self._tap("a", -dx, 0.025)
+            self._tap(KEY_MOVE_LEFT, -dx, 0.015)
 
         if dy > 0:
-            self._tap("s", dy, 0.02)
+            self._tap(KEY_MOVE_DOWN, dy, 0.015)
         elif dy < 0:
-            self._tap("w", -dy, 0.02)
+            self._tap(KEY_MOVE_UP, -dy, 0.015)
 
         if click:
-            self.keyboard.tap("enter", repeat=1, delay=0.0)
+            self.keyboard.tap(KEY_CONFIRM, repeat=1, delay=0.0)
 
         self.current_pos = target
+    
+    def _optimize_path(self, positions: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+        """Optimize the order of positions using dynamic programming (Traveling Salesman Problem approximation)."""
+        if len(positions) <= 1:
+            return positions
+        
+        # Calculate distance between two grid positions (Manhattan distance)
+        def distance(p1: Tuple[int, int], p2: Tuple[int, int]) -> int:
+            return abs(p1[0] - p2[0]) + abs(p1[1] - p2[1])
+        
+        # Start from current position (1, 1)
+        start = (1, 1)
+        n = len(positions)
+        
+        # For small number of positions (typical case: 4 matches), use complete search with memoization
+        if n <= 4:
+            from functools import lru_cache
+            
+            @lru_cache(maxsize=None)
+            def min_path(current: Tuple[int, int], remaining: frozenset) -> Tuple[int, List[Tuple[int, int]]]:
+                """Find minimum cost path through remaining positions."""
+                if not remaining:
+                    return (0, [])
+                
+                best_cost = float('inf')
+                best_path = []
+                
+                for next_pos in remaining:
+                    cost = distance(current, next_pos)
+                    new_remaining = remaining - {next_pos}
+                    rest_cost, rest_path = min_path(next_pos, frozenset(new_remaining))
+                    total_cost = cost + rest_cost
+                    
+                    if total_cost < best_cost:
+                        best_cost = total_cost
+                        best_path = [next_pos] + rest_path
+                
+                return (best_cost, best_path)
+            
+            _, optimal_path = min_path(start, frozenset(positions))
+            return optimal_path
+        
+        # For larger sets, fall back to greedy nearest neighbor
+        optimized = []
+        remaining = positions.copy()
+        current = start
+        
+        while remaining:
+            nearest = min(remaining, key=lambda pos: distance(current, pos))
+            optimized.append(nearest)
+            remaining.remove(nearest)
+            current = nearest
+        
+        return optimized
 
     def match_fingerprint(self) -> None:
         if not self._lock.acquire(blocking=False):
@@ -363,26 +592,37 @@ class FingerprintSolver:
             frame = self._grab_area()
             frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-            matches = 0
+            # Collect all matches first
+            match_positions = []
             for template_gray in self.templates_gray:
                 hit = self._match_template(frame_gray, template_gray)
                 if not hit:
                     continue
 
                 grid_pos = self._map_to_grid(*hit)
-                self._move_cursor(grid_pos, click=True)
-                matches += 1
-
+                print(f"[DEBUG] Match detected at screen pos {hit} -> grid pos {grid_pos}")
+                match_positions.append(grid_pos)
+            
+            # Optimize the traversal order
+            if match_positions:
+                optimized_positions = self._optimize_path(match_positions)
+                print(f"[DEBUG] Optimized path: {optimized_positions}")
+                
+                # Execute the optimized path
+                for grid_pos in optimized_positions:
+                    self._move_cursor(grid_pos, click=True)
+            
+            matches = len(match_positions)
             elapsed = (time.time() - start) * 1000
             print(f"Matches found: {matches} | Capture + solve: {elapsed:.0f}ms")
 
             if matches == 0:
-                self.keyboard.tap("tab", repeat=1, delay=0.0)
+                self.keyboard.tap(KEY_SKIP, repeat=1, delay=0.0)
             elif matches < 4:
                 self._move_cursor((1, 1), click=False)
             else:
                 time.sleep(0.01)
-                self.keyboard.tap("tab", repeat=1, delay=0.0)
+                self.keyboard.tap(KEY_SKIP, repeat=1, delay=0.0)
             if self.reset_state:
                 self._hard_reset_cursor()
         finally:
