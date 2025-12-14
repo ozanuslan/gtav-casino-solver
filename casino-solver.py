@@ -8,7 +8,7 @@ Hotkeys (global):
 - Ctrl+T: exit.
 
 Dependencies (install in the same environment you run the game):
-    pip install mss opencv-python numpy keyboard
+    pip install mss opencv-python numpy pynput
 
 CLI options:
 - --monitor N            Select which monitor to capture (mss index, default 1).
@@ -30,12 +30,12 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import cv2
-import keyboard
 import mss
 import numpy as np
+from pynput import keyboard as pynput_keyboard
 
 
 BASE_RESOLUTION = (1920, 1080)
@@ -178,11 +178,26 @@ def load_templates(root: Path, screen_size: Tuple[int, int]) -> Tuple[List[np.nd
 
 
 class GenericKeyboard:
-    """Cross-platform keyboard events via the keyboard library."""
+    """Cross-platform keyboard events via pynput."""
+
+    def __init__(self) -> None:
+        self.controller = pynput_keyboard.Controller()
+
+    @staticmethod
+    def _normalize_key(key: str) -> Union[pynput_keyboard.Key, str]:
+        lookup = {
+            "enter": pynput_keyboard.Key.enter,
+            "tab": pynput_keyboard.Key.tab,
+            "shift": pynput_keyboard.Key.shift,
+            "ctrl": pynput_keyboard.Key.ctrl,
+        }
+        return lookup.get(key.lower(), key)
 
     def tap(self, key: str, repeat: int = 1, delay: float = 0.02) -> None:  # pragma: no cover - hardware dependent
+        key_obj = self._normalize_key(key)
         for _ in range(repeat):
-            keyboard.press_and_release(key)
+            self.controller.press(key_obj)
+            self.controller.release(key_obj)
             if delay:
                 time.sleep(delay)
 
@@ -409,11 +424,25 @@ def main() -> None:
     overlay = Overlay(solver.area)
     shutdown = threading.Event()
 
-    keyboard.add_hotkey("ctrl+e", solver.match_fingerprint, trigger_on_release=False)
-    keyboard.add_hotkey("ctrl+r", solver.reset_cursor, trigger_on_release=False)
-    keyboard.on_press_key("right shift", lambda _: overlay.show())
-    keyboard.on_release_key("right shift", lambda _: overlay.hide())
-    keyboard.add_hotkey("ctrl+t", shutdown.set)
+    hotkeys = pynput_keyboard.GlobalHotKeys(
+        {
+            "<ctrl>+e": solver.match_fingerprint,
+            "<ctrl>+r": solver.reset_cursor,
+            "<ctrl>+t": shutdown.set,
+        }
+    )
+    hotkeys.start()
+
+    def on_press(key: Union[pynput_keyboard.Key, pynput_keyboard.KeyCode]) -> None:
+        if key == pynput_keyboard.Key.shift_r:
+            overlay.show()
+
+    def on_release(key: Union[pynput_keyboard.Key, pynput_keyboard.KeyCode]) -> None:
+        if key == pynput_keyboard.Key.shift_r:
+            overlay.hide()
+
+    listener = pynput_keyboard.Listener(on_press=on_press, on_release=on_release)
+    listener.start()
 
     print("Casino fingerprint solver (Python)")
     print(
@@ -429,6 +458,9 @@ def main() -> None:
             time.sleep(0.1)
     except KeyboardInterrupt:
         pass
+    finally:
+        hotkeys.stop()
+        listener.stop()
 
 
 if __name__ == "__main__":
