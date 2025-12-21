@@ -8,7 +8,7 @@ Python port of Carrot’s AHK fingerprint solver with multi‑monitor support an
   ```bash
   cd gtav-casino-solver
   python -m venv .venv
-  source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+  .venv\Scripts\activate
   pip install -r requirements.txt
   ```
 - Run (example: game on monitor 2 at 1920x1080):
@@ -36,8 +36,9 @@ Python port of Carrot’s AHK fingerprint solver with multi‑monitor support an
 - If false positives/misses: tweak `--match-threshold` slightly (e.g., 0.52–0.65). 
 - Multi-monitor: mss indices are 1..N; try `--monitor 1`, then 2, etc., until the printed bounds match your target display.
 
-## Optional Linux helpers
-`setup.sh` installs extra tools (xdotool/uinput, builds `inputter/`) if you want lower-level input on Linux. The main solver works with just the Python deps above; you typically do not need this script on Windows.
+## Note for Linux
+Since the release of GTAV Enhanced, BattleEye anticheat does not play nicely with Linux anymore. You will get kicked almost immediately or within couple of minutes of entering a lobby. Thus, I have abandoned the Linux support. Should the BattleEye situation get resolved in the future, I will happily add support again.
+
 
 ## Linux Support
 Brother, you gotta install `tk` on the system.
