@@ -36,10 +36,5 @@ Python port of Carrot’s AHK fingerprint solver with multi‑monitor support an
 - If false positives/misses: tweak `--match-threshold` slightly (e.g., 0.52–0.65). 
 - Multi-monitor: mss indices are 1..N; try `--monitor 1`, then 2, etc., until the printed bounds match your target display.
 
-## Note for Linux
-Since the release of GTAV Enhanced, BattleEye anticheat does not play nicely with Linux anymore. You will get kicked almost immediately or within couple of minutes of entering a lobby. Thus, I have abandoned the Linux support. Should the BattleEye situation get resolved in the future, I will happily add support again.
-
-
 ## Linux Support
-Brother, you gotta install `tk` on the system.
-*IMPORTANT:* Does not work on wayland! Only works on X11.
+Since the release of GTAV Enhanced, BattleEye anticheat does not play nicely with Linux anymore. You will get kicked almost immediately or within couple of minutes of entering a lobby. Thus, I have abandoned the Linux support. Should the BattleEye situation get resolved in the future, I will happily add support again.
