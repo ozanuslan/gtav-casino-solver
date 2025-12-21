@@ -5,7 +5,7 @@ Hotkeys (global):
 - Ctrl+E: run the solver once.
 - Ctrl+R: reset cursor to grid top-left.
 - Right Shift (hold): show the scan area overlay.
-- Ctrl+T: exit.
+- Ctrl+P: exit.
 
 Dependencies (install in the same environment you run the game):
     pip install mss opencv-python numpy pynput
@@ -721,7 +721,7 @@ def main() -> None:
         {
             "<ctrl>+e": solver.match_fingerprint,
             "<ctrl>+r": solver.reset_cursor,
-            "<ctrl>+t": shutdown.set,
+            "<ctrl>+p": shutdown.set,
         }
     )
     hotkeys.start()
@@ -749,7 +749,7 @@ def main() -> None:
         f"Scan area: {solver.area.left},{solver.area.top} -> {solver.area.right},{solver.area.bottom}"
     )
     print(
-        "Hotkeys: Ctrl+E to solve, Ctrl+R to reset cursor, Right Shift to preview area, Ctrl+T to exit."
+        "Hotkeys: Ctrl+E to solve, Ctrl+R to reset cursor, Right Shift to preview area, Ctrl+P to exit."
     )
 
     try:
