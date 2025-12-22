@@ -29,6 +29,7 @@ import argparse
 import json
 import queue
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -699,7 +700,13 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    script_dir = Path(__file__).resolve().parent
+    # Handle PyInstaller bundled mode
+    if getattr(sys, "frozen", False):
+        # Running as bundled executable - use PyInstaller's temp extraction directory
+        script_dir = Path(sys._MEIPASS)
+    else:
+        # Running as script - use script's directory
+        script_dir = Path(__file__).resolve().parent
 
     try:
         solver = FingerprintSolver(

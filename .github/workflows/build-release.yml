@@ -1,0 +1,68 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - "v*" # Triggers on tags like v1.0.0, v1.2.3, etc.
+
+jobs:
+  build:
+    name: Build Windows Executable
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: "x64"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build executable
+        run: |
+          python build.py
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: casino-solver-windows
+          path: dist/casino-solver.exe
+          retention-days: 30
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/casino-solver.exe
+          name: Release ${{ github.ref_name }}
+          body: |
+            ## Standalone Executable
+
+            This release contains a standalone Windows executable that includes all dependencies and templates.
+
+            ### Usage
+            Download `casino-solver.exe` and run it directly - no Python installation required.
+
+            ### Command Line Options
+            - `--monitor N` - Select which monitor to capture (default: 1)
+            - `--resolution WxH` - Override resolution (e.g., 2560x1440)
+            - `--match-threshold F` - Matching threshold (default: 0.58)
+            - `--scan-box x1,y1,x2,y2` - Manual scan area override
+            - `--reset-state` - Force cursor reset before/after solving
+
+            ### Hotkeys
+            - `Ctrl+E` - Solve once
+            - `Ctrl+R` - Reset cursor to top-left
+            - `Right Shift` (hold) - Show scan area overlay
+            - `Ctrl+P` - Exit
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
