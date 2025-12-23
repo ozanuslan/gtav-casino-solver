@@ -61,7 +61,7 @@ jobs:
 
             ### Hotkeys
             - `Ctrl+E` - Solve once
-            - `Ctrl+R` - Reset cursor to top-left
+            - `Ctrl+Shift+R` - Reset cursor to top-left
             - `Right Shift` (hold) - Show scan area overlay
             - `Ctrl+P` - Exit
           generate_release_notes: true

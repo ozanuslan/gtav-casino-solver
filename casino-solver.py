@@ -3,7 +3,7 @@ Python port of Carrot's fingerprint solver (AHK v1.5), now cross-platform.
 
 Hotkeys (global):
 - Ctrl+E: run the solver once.
-- Ctrl+R: reset cursor to grid top-left.
+- Ctrl+Shift+R: reset cursor to grid top-left.
 - Right Shift (hold): show the scan area overlay.
 - Ctrl+P: exit.
 
@@ -727,7 +727,7 @@ def main() -> None:
     hotkeys = pynput_keyboard.GlobalHotKeys(
         {
             "<ctrl>+e": solver.match_fingerprint,
-            "<ctrl>+r": solver.reset_cursor,
+            "<ctrl>+<shift>+r": solver.reset_cursor,
             "<ctrl>+p": shutdown.set,
         }
     )
@@ -756,7 +756,7 @@ def main() -> None:
         f"Scan area: {solver.area.left},{solver.area.top} -> {solver.area.right},{solver.area.bottom}"
     )
     print(
-        "Hotkeys: Ctrl+E to solve, Ctrl+R to reset cursor, Right Shift to preview area, Ctrl+P to exit."
+        "Hotkeys: Ctrl+E to solve, Ctrl+Shift+R to reset cursor, Right Shift to preview area, Ctrl+P to exit."
     )
 
     try:

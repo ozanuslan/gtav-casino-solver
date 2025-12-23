@@ -17,7 +17,8 @@ Python port of Carrot’s AHK fingerprint solver with multi‑monitor support an
   ```
 
 ## Controls
-- Ctrl+E or Right Ctrl: solve once.
+- Ctrl+E: solve once.
+- Ctrl+Shift+R: reset cursor.
 - Right Shift (hold): show scan-area overlay.
 - Ctrl+T: exit.
 
