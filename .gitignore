@@ -3,3 +3,4 @@
 /build
 /.venv
 /*.spec
+/__pycache__

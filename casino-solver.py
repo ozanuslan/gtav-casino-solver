@@ -16,6 +16,7 @@ CLI options:
 - --match-threshold F    Matching cutoff (default 0.58; higher = stricter).
 - --scan-box x1,y1,x2,y2 Manual scan area override (screen coords).
 - --reset-state          Force cursor to top-left before/after solving to avoid drift.
+- --refresh-rate N       Override refresh rate in Hz (e.g., 60, 144, 240). If not specified, auto-detects from monitor.
 
 Notes:
 - Runs best with the game in windowed borderless mode so screen captures work and key events land.
@@ -47,6 +48,8 @@ TEMPLATE_COUNT = 16
 MATCH_THRESHOLD = (
     0.58  # Increase if you get false positives, decrease if matches are missed.
 )
+# Refresh rate that delays are calibrated for (baseline for scaling)
+CALIBRATED_REFRESH_RATE = 144  # Hz
 
 # Game control keys
 KEY_MOVE_LEFT = "a"
@@ -89,6 +92,7 @@ class DisplayInfo:
     height: int
     left: int
     top: int
+    refresh_rate: Optional[int] = None  # Hz, None if unavailable
 
     @property
     def right(self) -> int:
@@ -124,6 +128,175 @@ class ScanArea:
         }
 
 
+def get_display_refresh_rate_windows(monitor_index: int) -> Optional[int]:
+    """
+    Get refresh rate for a monitor using Windows API (Windows only).
+
+    Note: monitor_index should match mss monitor indices (1-based, where 1 is the first monitor).
+    EnumDisplayMonitors order should match mss monitor order in most cases.
+    """
+    if sys.platform != "win32":
+        return None
+
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        # Windows API constant
+        ENUM_CURRENT_SETTINGS = -1
+
+        class DEVMODEW(ctypes.Structure):
+            _fields_ = [
+                ("dmDeviceName", wintypes.WCHAR * 32),
+                ("dmSpecVersion", wintypes.WORD),
+                ("dmDriverVersion", wintypes.WORD),
+                ("dmSize", wintypes.WORD),
+                ("dmDriverExtra", wintypes.WORD),
+                ("dmFields", wintypes.DWORD),
+                ("dmOrientation", ctypes.c_short),
+                ("dmPaperSize", ctypes.c_short),
+                ("dmPaperLength", ctypes.c_short),
+                ("dmPaperWidth", ctypes.c_short),
+                ("dmScale", ctypes.c_short),
+                ("dmCopies", ctypes.c_short),
+                ("dmDefaultSource", ctypes.c_short),
+                ("dmPrintQuality", ctypes.c_short),
+                ("dmColor", ctypes.c_short),
+                ("dmDuplex", ctypes.c_short),
+                ("dmYResolution", ctypes.c_short),
+                ("dmTTOption", ctypes.c_short),
+                ("dmCollate", ctypes.c_short),
+                ("dmFormName", wintypes.WCHAR * 32),
+                ("dmLogPixels", wintypes.WORD),
+                ("dmBitsPerPel", wintypes.DWORD),
+                ("dmPelsWidth", wintypes.DWORD),
+                ("dmPelsHeight", wintypes.DWORD),
+                ("dmDisplayFlags", wintypes.DWORD),
+                ("dmDisplayFrequency", wintypes.DWORD),
+            ]
+
+        # Collect monitor handles using EnumDisplayMonitors
+        monitor_handles = []
+
+        def monitor_enum_proc(hMonitor, hdcMonitor, lprcMonitor, dwData):
+            monitor_handles.append(hMonitor)
+            return True
+
+        MonitorEnumProc = ctypes.WINFUNCTYPE(
+            ctypes.c_bool,
+            ctypes.c_ulong,
+            ctypes.c_ulong,
+            ctypes.POINTER(ctypes.wintypes.RECT),
+            ctypes.c_ulong,
+        )
+
+        user32 = ctypes.windll.user32
+        user32.EnumDisplayMonitors(None, None, MonitorEnumProc(monitor_enum_proc), 0)
+
+        # mss.monitors[0] is "all monitors", so monitor_index 1 = first actual monitor
+        # EnumDisplayMonitors returns actual monitors in order (no "all monitors" entry)
+        if monitor_index <= 0 or monitor_index > len(monitor_handles):
+            return None
+
+        # Get device name for the specified monitor
+        monitor_handle = monitor_handles[monitor_index - 1]
+
+        # Get monitor info to retrieve device name
+        class MONITORINFOEX(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("rcMonitor", ctypes.wintypes.RECT),
+                ("rcWork", ctypes.wintypes.RECT),
+                ("dwFlags", wintypes.DWORD),
+                ("szDevice", wintypes.WCHAR * 32),
+            ]
+
+        monitor_info = MONITORINFOEX()
+        monitor_info.cbSize = ctypes.sizeof(MONITORINFOEX)
+        if not user32.GetMonitorInfoW(monitor_handle, ctypes.byref(monitor_info)):
+            return None
+
+        # Get display settings for this device
+        # Note: EnumDisplaySettingsW is in user32.dll, not gdi32.dll!
+        devmode = DEVMODEW()
+        devmode.dmSize = ctypes.sizeof(DEVMODEW)
+
+        # Use EnumDisplaySettingsW from user32.dll (as shown in the gist)
+        # Pass the device name from monitor_info, or None for primary display
+        user32 = ctypes.windll.user32
+        result = user32.EnumDisplaySettingsW(
+            monitor_info.szDevice, ENUM_CURRENT_SETTINGS, ctypes.byref(devmode)
+        )
+        if result != 0:  # Non-zero means success
+            return int(devmode.dmDisplayFrequency)
+
+    except Exception as e:  # noqa: BLE001
+        # Fail gracefully if Windows API calls fail
+        # Try registry-based fallback method
+        try:
+            return _get_refresh_rate_from_registry(monitor_index)
+        except Exception:  # noqa: BLE001
+            print(f"[WARNING] Could not retrieve refresh rate: {e}")
+            return None
+
+    return None
+
+
+def _get_refresh_rate_from_registry(monitor_index: int) -> Optional[int]:
+    """Fallback method: Get refresh rate using PowerShell WMI query."""
+    if sys.platform != "win32":
+        return None
+
+    try:
+        # Use PowerShell to query display refresh rate via WMI
+        # Get-CimInstance Win32_VideoController | Select-Object CurrentRefreshRate
+        ps_command = (
+            "Get-CimInstance Win32_VideoController | "
+            "Select-Object -ExpandProperty CurrentRefreshRate | "
+            "Where-Object { $_ -gt 0 } | "
+            "Select-Object -First 1"
+        )
+        result = subprocess.run(
+            ["powershell", "-Command", ps_command],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if result.returncode == 0:
+            output = result.stdout.strip()
+            if output and output.isdigit():
+                rate = int(output)
+                if 30 <= rate <= 360:  # Reasonable refresh rate range
+                    return rate
+    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
+        pass
+
+    # Alternative: Try using Get-WmiObject (older PowerShell)
+    try:
+        ps_command = (
+            "Get-WmiObject Win32_VideoController | "
+            "Select-Object -ExpandProperty CurrentRefreshRate | "
+            "Where-Object { $_ -gt 0 } | "
+            "Select-Object -First 1"
+        )
+        result = subprocess.run(
+            ["powershell", "-Command", ps_command],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if result.returncode == 0:
+            output = result.stdout.strip()
+            if output and output.isdigit():
+                rate = int(output)
+                if 30 <= rate <= 360:
+                    return rate
+    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
+        pass
+
+    return None
+
+
 def get_display_info(monitor_index: int) -> DisplayInfo:
     """Cross-platform monitor info; monitor_index follows mss (1-based)."""
     with mss.mss() as sct:
@@ -134,11 +307,15 @@ def get_display_info(monitor_index: int) -> DisplayInfo:
                 f"Monitor {monitor_index} not found. Available: 1..{len(sct.monitors) - 1}"
             ) from exc
 
+        # Try to get refresh rate (Windows only)
+        refresh_rate = get_display_refresh_rate_windows(monitor_index)
+
         return DisplayInfo(
             width=int(mon["width"]),
             height=int(mon["height"]),
             left=int(mon["left"]),
             top=int(mon["top"]),
+            refresh_rate=refresh_rate,
         )
 
 
@@ -230,7 +407,7 @@ class RustInputter:
 class WindowsDirectInput:
     """Direct keyboard input using Windows SendInput API (works with games like GTA V)."""
 
-    def __init__(self) -> None:
+    def __init__(self, refresh_rate: Optional[int] = None) -> None:
         import ctypes
         from ctypes import wintypes
 
@@ -303,6 +480,16 @@ class WindowsDirectInput:
         self.KEYEVENTF_KEYUP = 0x0002
         self.KEYEVENTF_SCANCODE = 0x0008
 
+        # Calculate delay scale factor based on refresh rate (calibrated for 144Hz)
+        if refresh_rate and refresh_rate > 0:
+            self.delay_scale = CALIBRATED_REFRESH_RATE / refresh_rate
+        else:
+            self.delay_scale = 1.0  # Default to no scaling if refresh rate unknown
+
+    def _scale_delay(self, delay: float) -> float:
+        """Scale a delay value based on refresh rate (calibrated for 144Hz)."""
+        return delay * self.delay_scale
+
     def _get_vk_code(self, key: str | Key) -> int:
         """Get virtual key code for a key."""
         if isinstance(key, Key):
@@ -337,8 +524,10 @@ class WindowsDirectInput:
             print(f"[WARNING] Unknown key: {key}")
             return
 
+        # Scale the delay parameter (default 0.02 = 20ms, calibrated for 144Hz)
+        scaled_delay = self._scale_delay(delay)
         print(
-            f"[DEBUG] Tapping key: {key} (SC:{scan_code:#04x}) x{repeat} times with {delay}s delay"
+            f"[DEBUG] Tapping key: {key} (SC:{scan_code:#04x}) x{repeat} times with {scaled_delay:.4f}s delay (scaled from {delay:.4f}s)"
         )
 
         for _ in range(repeat):
@@ -350,7 +539,10 @@ class WindowsDirectInput:
                 1, self.ctypes.byref(input_down), self.ctypes.sizeof(input_down)
             )
 
-            time.sleep(0.015)  # 15ms delay between press and release
+            press_release_delay = self._scale_delay(
+                0.015
+            )  # 15ms delay between press and release (scaled)
+            time.sleep(press_release_delay)
 
             # Key up - using scan code for hardware-level input
             ki_up = self.KeyBdInput(
@@ -360,8 +552,8 @@ class WindowsDirectInput:
             input_up.union.ki = ki_up
             self.SendInput(1, self.ctypes.byref(input_up), self.ctypes.sizeof(input_up))
 
-            if delay:
-                time.sleep(delay)
+            if scaled_delay:
+                time.sleep(scaled_delay)
 
 
 class GenericKeyboard:
@@ -454,6 +646,7 @@ class FingerprintSolver:
         match_threshold: float,
         scan_override: Optional[Tuple[int, int, int, int]],
         reset_state: bool,
+        refresh_rate_override: Optional[int] = None,
     ) -> None:
         self.template_root = template_root
         self.monitor = get_display_info(monitor_index)
@@ -477,14 +670,33 @@ class FingerprintSolver:
         self.match_threshold = match_threshold
         self.reset_state = reset_state
 
+        # Get refresh rate for delay scaling (calibrated for 144Hz)
+        # Use override if provided, otherwise use detected refresh rate
+        self.refresh_rate = refresh_rate_override or self.monitor.refresh_rate
+        if self.refresh_rate and self.refresh_rate > 0:
+            self.delay_scale = CALIBRATED_REFRESH_RATE / self.refresh_rate
+            source = "override" if refresh_rate_override else "detected"
+            print(
+                f"[INFO] Delay scaling: {CALIBRATED_REFRESH_RATE}Hz baseline -> {self.refresh_rate}Hz ({source}) (scale: {self.delay_scale:.3f}x)"
+            )
+        else:
+            self.delay_scale = 1.0
+            print(
+                f"[INFO] Delay scaling: refresh rate unknown, using default delays (calibrated for {CALIBRATED_REFRESH_RATE}Hz)"
+            )
+
         # Use WindowsDirectInput - Rust binary has compatibility issues with old enigo version
         print(f"[INFO] Using WindowsDirectInput for key sending")
         self.use_rust = False
-        self.keyboard = WindowsDirectInput()
+        self.keyboard = WindowsDirectInput(self.refresh_rate)
         self.rust_inputter = None
 
         self.current_pos = (1, 1)
         self._lock = threading.Lock()
+
+    def _scale_delay(self, delay: float) -> float:
+        """Scale a delay value based on refresh rate (calibrated for 144Hz)."""
+        return delay * self.delay_scale
 
     def _grab_area(self) -> np.ndarray:
         with mss.mss() as sct:
@@ -524,10 +736,11 @@ class FingerprintSolver:
 
     def _hard_reset_cursor(self) -> None:
         """Force cursor to top-left of the 2x4 grid to avoid drift."""
+        move_delay = self._scale_delay(0.015)
         # Two columns -> 2 moves left is enough; add one extra for safety.
-        self._tap(KEY_MOVE_LEFT, 3, 0.015)
+        self._tap(KEY_MOVE_LEFT, 3, move_delay)
         # Four rows -> 4 moves up is enough; add one extra for safety.
-        self._tap(KEY_MOVE_UP, 5, 0.015)
+        self._tap(KEY_MOVE_UP, 5, move_delay)
         self.current_pos = (1, 1)
 
     def reset_cursor(self) -> None:
@@ -544,16 +757,17 @@ class FingerprintSolver:
     def _move_cursor(self, target: Tuple[int, int], click: bool = True) -> None:
         dx = target[0] - self.current_pos[0]
         dy = target[1] - self.current_pos[1]
+        move_delay = self._scale_delay(0.015)
 
         if dx > 0:
-            self._tap(KEY_MOVE_RIGHT, dx, 0.015)
+            self._tap(KEY_MOVE_RIGHT, dx, move_delay)
         elif dx < 0:
-            self._tap(KEY_MOVE_LEFT, -dx, 0.015)
+            self._tap(KEY_MOVE_LEFT, -dx, move_delay)
 
         if dy > 0:
-            self._tap(KEY_MOVE_DOWN, dy, 0.015)
+            self._tap(KEY_MOVE_DOWN, dy, move_delay)
         elif dy < 0:
-            self._tap(KEY_MOVE_UP, -dy, 0.015)
+            self._tap(KEY_MOVE_UP, -dy, move_delay)
 
         if click:
             self.keyboard.tap(KEY_CONFIRM, repeat=1, delay=0.0)
@@ -661,7 +875,8 @@ class FingerprintSolver:
             elif matches < 4:
                 self._move_cursor((1, 1), click=False)
             else:
-                time.sleep(0.01)
+                post_match_delay = self._scale_delay(0.01)
+                time.sleep(post_match_delay)
                 self.keyboard.tap(KEY_SKIP, repeat=1, delay=0.0)
             if self.reset_state:
                 self._hard_reset_cursor()
@@ -670,7 +885,16 @@ class FingerprintSolver:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Casino fingerprint solver")
+    parser = argparse.ArgumentParser(
+        epilog="""
+Hotkeys:
+  Ctrl+E          - Solve the fingerprint puzzle once
+  Ctrl+Shift+R    - Reset cursor to grid top-left
+  Right Shift     - Show scan area overlay (hold)
+  Ctrl+P          - Exit the solver
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument(
         "--monitor",
         type=int,
@@ -681,6 +905,11 @@ def main() -> None:
         "--resolution",
         type=parse_resolution,
         help="Override resolution for scan area/templates, e.g., 2560x1440",
+    )
+    parser.add_argument(
+        "--refresh-rate",
+        type=int,
+        help="Override refresh rate in Hz (e.g., 60, 144, 240). If not specified, auto-detects from monitor.",
     )
     parser.add_argument(
         "--match-threshold",
@@ -716,6 +945,7 @@ def main() -> None:
             match_threshold=args.match_threshold,
             scan_override=args.scan_box,
             reset_state=args.reset_state,
+            refresh_rate_override=args.refresh_rate,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"Startup failed: {exc}")
@@ -745,8 +975,11 @@ def main() -> None:
     listener.start()
 
     print("Casino fingerprint solver (Python)")
+    refresh_info = (
+        f" @ {solver.monitor.refresh_rate}Hz" if solver.monitor.refresh_rate else ""
+    )
     print(
-        f"Monitor {args.monitor}: {solver.monitor.width}x{solver.monitor.height} "
+        f"Monitor {args.monitor}: {solver.monitor.width}x{solver.monitor.height}{refresh_info} "
         f"@ ({solver.monitor.left},{solver.monitor.top}) | Using resolution {solver.screen_size[0]}x{solver.screen_size[1]}"
     )
     print(
